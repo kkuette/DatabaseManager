@@ -1,5 +1,5 @@
 # DatabaseManager
-A Database manager for Mongodb written in python.
+A Database manager for MongoDB written in python.
 
 # How to use
   ```python
