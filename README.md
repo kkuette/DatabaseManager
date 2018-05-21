@@ -3,7 +3,7 @@ A Database manager for MongoDB written in python.
 
 # How to use
   ```python
-  import dataBaseManager
+  from DatabaseManager import dataBaseManager
   from pymongo import MongoClient
 
     clients = dict(test = MongoClient('localhost', 27017)) # Support multi client
