@@ -29,3 +29,6 @@ A Database manager for MongoDB written in python.
     data = dbm.getCollectionData() # Get data from last added collections
     # you can specify what to get getCollectionData(self, collection=None, db=None, name=None)
     # it's also possible to change manualy last data with setFull(self, collection, db, name)
+    dbm.addRunner() # Add a runner for threaded auto push into database
+    dbm.startAllRunner() # Start all runner
+    dbm.stopAllRunner() # Stop all runner
