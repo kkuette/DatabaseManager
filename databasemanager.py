@@ -1,10 +1,12 @@
 from pymongo import MongoClient
 from copy import deepcopy
 import warnings
+from threading import Thread
+import time
 
 class dataBaseManager(object):
 
-    def __init__(self, clients=None):
+    def __init__(self, name=None, host='localhost', port=27017, clients=None):
         '''
         args:
             Clients : dict filled with name of client and MongoClient
@@ -14,14 +16,16 @@ class dataBaseManager(object):
         self.clients = dict()
 
         # Init default values
-        self.is_running = False
         self.last_client = None
         self.last_db = None
         self.last_collection = None
+        self.runner = []
 
         if clients:
             for name, client in clients.items():
                 self.addClient(client, name)
+        elif name:
+            self.addClient(MongoClient(host, port), name)
 
     def setFull(self, collection, db, name):
         self.setClient(name)
@@ -102,8 +106,8 @@ class dataBaseManager(object):
 
         if isinstance(collection, str):
             self.clients[name]['databases'][db][collection] = dict(
-                id = 0,
-                current_id = 0,
+                id = -1,
+                current_id = -1,
                 data = []
             )
             self.last_collection = collection
@@ -111,8 +115,8 @@ class dataBaseManager(object):
             for item in collection:
                 dbmErrorHandler.CollectionError(item)
                 self.clients[name]['databases'][db][item] = dict(
-                    id = 0,
-                    current_id = 0,
+                    id = -1,
+                    current_id = -1,
                     data = []
                 )
                 self.last_collection = item
@@ -140,21 +144,21 @@ class dataBaseManager(object):
         dbmErrorHandler.DataBaseError(db)
         dbmErrorHandler.ClientNameError(name)
 
-        if self.clients[name]['databases'][db][collection]['id'] == 0:
+        if self.clients[name]['databases'][db][collection]['id'] == -1:
             self.clients[name]['databases'][db][collection]['id'] = \
                 self.getGivenCollection().count() - 1
 
         if isinstance(data, dict):
             self.clients[name]['databases'][db][collection]['id'] += 1
             data['id'] = self.clients[name]['databases'][db][collection]['id']
-            self.clients[name]['databases'][db][collection]['data'].append(data)
+            self.clients[name]['databases'][db][collection]['data'].append(deepcopy(data))
 
         elif isinstance(data, list):
             for item in data:
                 dbmErrorHandler.DataError(item)
                 self.clients[name]['databases'][db][collection]['id'] += 1
                 item['id'] = self.clients[name]['databases'][db][collection]['id']
-                self.clients[name]['databases'][db][collection]['data'].append(item)
+                self.clients[name]['databases'][db][collection]['data'].append(deepcopy(item))
         else:
             dbmErrorHandler.DataError(data)
 
@@ -337,9 +341,16 @@ class dataBaseManager(object):
         dbmErrorHandler.ClientNameError(name)
         dbmErrorHandler.DataError(data)
         dbmErrorHandler.DataPushWarning(data, name+"/"+db+"/"+collection)
-
-        self.getGivenCollection(collection, db, name).insert_one(data)
-        self.clients[name]['databases'][db][collection]['current_id'] += 1
+        print (data)
+        #c_id = self.clients[name]['databases'][db][collection]['current_id']
+        #if self.getGivenCollection(collection, db, name).count() > 0:
+        #    id = self.clients[name]['databases'][db][collection]['id'] - \
+        #        (self.getGivenCollection(collection, db, name).count() - 1)
+        #else:
+        #    id = self.clients[name]['databases'][db][collection]['id']
+        if data:
+            self.getGivenCollection(collection, db, name).insert_one(data)
+            #self.clients[name]['databases'][db][collection]['current_id'] += 1
 
     def pushData(self, collection=None, db=None, name=None):
         if not name:
@@ -356,11 +367,15 @@ class dataBaseManager(object):
         data = self.getCollectionData(collection, db, name)
         c_id = self.clients[name]['databases'][db][collection]['current_id']
         dbmErrorHandler.DataPushWarning(data[c_id:], name+"/"+db+"/"+collection)
-        id = self.clients[name]['databases'][db][collection]['id']
+        if self.getGivenCollection(collection, db, name).count() > 0:
+            id = self.clients[name]['databases'][db][collection]['id'] - \
+                (self.getGivenCollection(collection, db, name).count() - 1)
+        else:
+            id = self.clients[name]['databases'][db][collection]['id']
         if data:
-            if c_id < id:
+            if c_id <= id:
                 self.getGivenCollection(collection, db, name).insert_many(data[c_id:])
-                self.clients[name]['databases'][db][collection]['current_id'] = id
+                self.clients[name]['databases'][db][collection]['current_id'] = id + 1
 
     def pullOneData(self, collection=None, db=None, name=None):
         if not name:
@@ -374,7 +389,7 @@ class dataBaseManager(object):
         dbmErrorHandler.DataBaseError(db)
         dbmErrorHandler.ClientNameError(name)
 
-        data_len = self.getGivenCollection().count() - 1
+        data_len = self.getGivenCollection(collection, db, name).count() - 1
         id = self.clients[name]['databases'][db][collection]['id']
 
         if data_len < 0 or id == data_len:
@@ -398,7 +413,7 @@ class dataBaseManager(object):
         dbmErrorHandler.DataBaseError(db)
         dbmErrorHandler.ClientNameError(name)
 
-        data_len = self.getGivenCollection().count() - 1
+        data_len = self.getGivenCollection(collection, db, name).count() - 1
         id = self.clients[name]['databases'][db][collection]['id']
 
         if data_len < 0 or id == data_len:
@@ -409,6 +424,69 @@ class dataBaseManager(object):
             for item in data:
                 del item['_id']
                 self.clients[name]['databases'][db][collection]['data'].append(item)
+
+    def addRunner(self, collection=None, db=None, name=None):
+        if not name:
+            name = self.last_client
+        if not db:
+            db = self.last_db
+        if not collection:
+            collection = self.last_collection
+
+        dbmErrorHandler.CollectionError(collection)
+        dbmErrorHandler.DataBaseError(db)
+        dbmErrorHandler.ClientNameError(name)
+
+        _runner = dict(
+            id = len(self.runner),
+            is_running = False,
+            collection = collection,
+            db = db,
+            name = name,
+            Thread = Thread(target=self.run)
+        )
+
+        self.runner.append(_runner)
+        self.last_runner = _runner['id']
+
+    def startAllRunner(self):
+        for id in range(len(self.runner)):
+            self.startRunner(id)
+
+    def stopAllRunner(self):
+        for id in range(len(self.runner)):
+            self.stopRunner(id)
+
+    def stopRunner(self, id):
+        try:
+            self.runner[id]['is_running'] = False
+        except IndexError:
+            dbmErrorHandler.RunnerExistWarning(id)
+
+    def startRunner(self, id):
+        try:
+            if not self.runner[id]['is_running']:
+                self.last_runner = id
+                self.runner[id]['Thread'].start()
+        except IndexError:
+            dbmErrorHandler.RunnerExistWarning(id)
+
+    def run(self, sleep=0.01):
+        runner = self.runner[self.last_runner]
+        collection = self.runner[runner['id']]['collection']
+        db = self.runner[runner['id']]['db']
+        name = self.runner[runner['id']]['name']
+        self.runner[runner['id']]['is_running'] = True
+        while self.runner[runner['id']]['is_running']:
+            id = deepcopy(self.clients[name]['databases'][db][collection]['id'] - \
+                (self.getGivenCollection(collection, db, name).count() - 1))
+            c_id = deepcopy(self.clients[name]['databases'][db][collection]['current_id'])
+            len_d = deepcopy(len(self.clients[name]['databases'][db][collection]['data']) - 1)
+            for idx in range(c_id+1, len_d):
+                data = self.clients[name]['databases'][db][collection]['data'][idx]
+                self.pushOneData(data, collection, db, name)
+                self.clients[name]['databases'][db][collection]['current_id'] += 1
+            time.sleep(sleep)
 
 class dbmErrorHandler(object):
     def custom_warning(msg, *args, **kwargs):
@@ -441,6 +519,9 @@ class dbmErrorHandler(object):
     def DataPullWarning(loc):
         warnings.warn("There is no data to pull in {}".format(loc))
 
+    def RunnerExistWarning(runner):
+        warnings.warn("This runner does not exist id: {}".format(runner))
+
 warnings.formatwarning = dbmErrorHandler.custom_warning
 
 if __name__ == '__main__':
@@ -469,3 +550,6 @@ if __name__ == '__main__':
     data = dbm.getCollectionData() # Get data from last added collections
     # you can specify what to get getCollectionData(self, collection=None, db=None, name=None)
     # it's also possible to change manualy last data with setFull(self, collection, db, name)
+    dbm.addRunner() # Add a runner for threaded auto push into database
+    dbm.startAllRunner() # Start all runner
+    dbm.stopAllRunner() # Stop all runner
